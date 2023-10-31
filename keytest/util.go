@@ -1,9 +1,24 @@
 package keytest
 
-import bignumbers "github.com/danielost/big-numbers/src"
+import (
+	"fmt"
 
-func getBinary(key string) string {
+	bignumbers "github.com/danielost/big-numbers/src"
+)
+
+func getBinary(key string) (string, error) {
 	bigNumber := bignumbers.BigNumber{}
-	bigNumber.SetHex(key)
-	return bigNumber.GetBinary()
+	err := bigNumber.SetHex(key)
+	if err != nil {
+		return "", err
+	}
+	return bigNumber.GetBinary(), nil
+}
+
+func validateKeyLength(binary string) error {
+	keyLength := len(binary)
+	if keyLength == 20000 {
+		return nil
+	}
+	return fmt.Errorf("expected key lenght to be 20000, but got %d", keyLength)
 }
