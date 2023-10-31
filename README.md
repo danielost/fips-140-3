@@ -1,4 +1,4 @@
-# FIPS 140-3 implemetation in Go
+# FIPS 140-3 implementation in Go
 Covers the following tests:
 - Monobit
 - Maximum series length
