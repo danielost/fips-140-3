@@ -1,14 +1,16 @@
 package keytest
 
-import (
-	bignumbers "github.com/danielost/big-numbers/src"
-)
+import "fmt"
 
-func getBinary(key string) (string, error) {
-	bigNumber := bignumbers.BigNumber{}
-	err := bigNumber.SetHex(key)
-	if err != nil {
-		return "", err
+func validateBinary(binary string) error {
+	length := len(binary)
+	if length != 20000 {
+		return fmt.Errorf("expected the input to be 20000 bits long, but got %d", length)
 	}
-	return bigNumber.GetBinary(), nil
+	for _, bit := range binary {
+		if bit != '0' && bit != '1' {
+			return fmt.Errorf("binary string contains prohibited symbols")
+		}
+	}
+	return nil
 }
