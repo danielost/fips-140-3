@@ -5,91 +5,102 @@ import (
 	"math"
 )
 
+// Runs all the FIPS tests for the input key (hex).
 func Run(key string) (bool, error) {
-	fmt.Printf("Starting FIPS 140-3 tests\n")
-	testData, err := calculateTestData(key)
+	binary, err := getBinary(key)
 	if err != nil {
 		return false, err
 	}
+	if len(binary) != 20000 {
+		return false, fmt.Errorf("expected key lenght to be 20000, but got %d", len(binary))
+	}
+	fmt.Printf("Starting FIPS 140-3 tests\n")
+	testData := calculateTestData(binary)
 	return testData.analyzeData(), nil
 }
 
-func calculateTestData(key string) (td TestData, err error) {
-	binary, err := getBinary(key)
-	if err != nil {
-		return td, err
-	}
-	if err := validateKeyLength(binary); err != nil {
-		return td, err
-	}
+// Based on the input binary value,
+// returns a TestData object filled
+// with the tests results.
+func calculateTestData(binary string) TestData {
 	fmt.Printf("Bits received from input: %d\n", len(binary))
+	td := InitTestData(binary)
 
-	td.hex = key
-	td.binary = binary
-	td.zeroSequences = make(map[int]int)
-	td.oneSequences = make(map[int]int)
-
-	// Data for the Poker test
+	// Data for the Poker test.
 	var (
-		m = 4
-		Y = len(td.binary)
-		k = Y / m
-		n = make(map[string]int)
+		m = 4                    // Poker block size.
+		k = len(binary) / m      // Number of Poker blocks.
+		n = make(map[string]int) // Counts the number of times each block appears.
 	)
 
-	// Data for the monobit and series tests
+	// Data for the series test.
 	var (
-		prevBit               = '1'
-		currentSequenceLength = 1
+		prevBit               = '1' // Used to compare current bits to previos bits – to determine if a sequence ended.
+		currentSequenceLength = 1   // Current sequence length counter.
 	)
 
 	for i, bit := range td.binary {
-		// Update the monobit data
-		if bit == '0' {
-			td.zeroBitCount++
-		} else {
-			td.oneBitCount++
-		}
+		// Update the monobit data.
+		td.updateMonobit(bit)
 
-		// Update the sequence data
+		// Update the series data.
 		if bit == prevBit {
 			currentSequenceLength++
 		} else if i > 0 {
-			if prevBit == '1' {
-				td.oneSequences[currentSequenceLength]++
-			} else {
-				td.zeroSequences[currentSequenceLength]++
-			}
+			td.updateSeries(prevBit, currentSequenceLength)
 			currentSequenceLength = 1
 			prevBit = bit
 		}
 
-		// Update the Poker data
+		// Update the Poker data.
 		if i%m == 0 {
-			block := td.binary[i : i+m]
-			n[block]++
-		}
-	}
-	if prevBit == '1' {
-		td.oneSequences[currentSequenceLength]++
-	} else {
-		td.zeroSequences[currentSequenceLength]++
-	}
-
-	sum := 0.0
-
-	for _, count := range n {
-		for i := 0; i < count; i++ {
-			sum += math.Pow(float64(count), 2)
+			td.updatePokerBlockCount(i, m, n)
 		}
 	}
 
-	td.poker = (math.Pow(2, float64(m)) / float64(k) * sum) - float64(k)
-	return td, nil
+	td.updateSeries(prevBit, currentSequenceLength)
+	td.calculatePoker(m, k, n)
+	return td
 }
 
+func (td *TestData) updateMonobit(bit rune) {
+	if bit == '0' {
+		td.zeroBitCount++
+	} else {
+		td.oneBitCount++
+	}
+}
+
+func (td *TestData) updateSeries(bit rune, sequenceLength int) {
+	if bit == '1' {
+		td.oneSequences[sequenceLength]++
+	} else {
+		td.zeroSequences[sequenceLength]++
+	}
+}
+
+func (td *TestData) updatePokerBlockCount(i, m int, n map[string]int) {
+	block := td.binary[i : i+m]
+	n[block]++
+}
+
+func (td *TestData) calculatePoker(m, k int, n map[string]int) {
+	// Calculate the sum for the Poker value.
+	sum := 0.0
+	for _, count := range n {
+		sum += math.Pow(float64(count), 2)
+	}
+
+	// Calculate the Poker value.
+	td.poker = math.Pow(2, float64(m))/float64(k)*sum - float64(k)
+}
+
+// Analyzes the data inside TestData.
 func (td *TestData) analyzeData() bool {
+	// Monobit test.
 	monobitPassed := td.oneBitCount > 9654 && td.oneBitCount < 10346
+
+	// Series test.
 	sequenceAppropriateValues := map[int][]int{
 		1: {2267, 2733},
 		2: {1079, 1421},
@@ -107,25 +118,26 @@ func (td *TestData) analyzeData() bool {
 
 	longestSequencePassed := longestSequence <= 36
 	sequenceLengthPassed := true
-	for i, v := range zeroSequenceActualValues {
-		sequenceLengthPassed = sequenceLengthPassed && sequenceAppropriateValues[i+1][0] <= v && sequenceAppropriateValues[i+1][1] >= v
-	}
-	for i, v := range oneSequenceActualValues {
-		sequenceLengthPassed = sequenceLengthPassed && sequenceAppropriateValues[i+1][0] <= v && sequenceAppropriateValues[i+1][1] >= v
+	for i := 0; sequenceLengthPassed && i < len(zeroSequenceActualValues); i++ {
+		zeroValue := zeroSequenceActualValues[i]
+		oneValue := oneSequenceActualValues[i]
+		zeroPassed := sequenceAppropriateValues[i+1][0] <= zeroValue && sequenceAppropriateValues[i+1][1] >= zeroValue
+		onePassed := sequenceAppropriateValues[i+1][0] <= oneValue && sequenceAppropriateValues[i+1][1] >= oneValue
+		sequenceLengthPassed = sequenceLengthPassed && zeroPassed && onePassed
 	}
 	pokerPassed := td.poker < 57.4 && td.poker > 1.03
 
 	passed := monobitPassed && longestSequencePassed && sequenceLengthPassed && pokerPassed
 	if passed {
-		fmt.Printf("==================\nFIPS 140-3 success\n==================\n")
+		fmt.Printf("===================\nFIPS 140-3 success:\n===================\n")
 	} else {
-		fmt.Printf("==================\nFIPS 140-3 failure\n==================\n")
+		fmt.Printf("===================\nFIPS 140-3 failure:\n===================\n")
 	}
 
-	printTestResult(monobitPassed, "Monobit", fmt.Sprintf("%d ones and %d zeros. Both values must be in range (9654, 10346).", td.oneBitCount, td.zeroBitCount))
-	printTestResult(longestSequencePassed, "Longest Sequence", fmt.Sprintf("Longest sequence is %d bits long. Must be less that or equal to 36.", longestSequence))
-	printTestResult(pokerPassed, "Poker", fmt.Sprintf("Poker value is %0.1f. Must be in range (1.03, 57.4).", td.poker))
-	printTestResult(sequenceLengthPassed, "Sequence Count", fmt.Sprintf("Sequences of ones:\t%v\nSequences of zeros:\t%v\nMust be [1:2267-2733, 2:1079-1421, 3:502-748, 4:223-402; 5:90-223, 6+:90-223].", oneSequenceActualValues, zeroSequenceActualValues))
+	printTestResult(monobitPassed, "Monobit", fmt.Sprintf("%d ones and %d zeros.", td.oneBitCount, td.zeroBitCount))
+	printTestResult(longestSequencePassed, "Longest Sequence", fmt.Sprintf("Longest sequence is %d bits long.", longestSequence))
+	printTestResult(pokerPassed, "Poker", fmt.Sprintf("Poker value is %0.1f.", td.poker))
+	printTestResult(sequenceLengthPassed, "Sequence Count", fmt.Sprintf("Sequences of ones:\t%v\nSequences of zeros:\t%v", oneSequenceActualValues, zeroSequenceActualValues))
 	return passed
 }
 
@@ -133,6 +145,8 @@ func printTestResult(passed bool, name, details string) {
 	fmt.Printf("FIPS 140-3 %s: %t\n%s\n\n", name, passed, details)
 }
 
+// Counts the number each suquence occurs.
+// Also updates the longest sequence value.
 func countSequences(sequence map[int]int, longestSequence *int, actualValues []int) {
 	for sequenceLength, sequenceCount := range sequence {
 		*longestSequence = max(*longestSequence, sequenceLength)
